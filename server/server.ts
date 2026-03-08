@@ -39,6 +39,7 @@ const app = express();
 const PORT = process.env.SERVER_PORT ? parseInt(process.env.SERVER_PORT, 10) : 4399;
 const HOST = process.env.SERVER_HOST || '127.0.0.1';
 const SESSION_TTL_DAYS = Number(process.env.SESSION_TTL_DAYS || 14);
+const UPLOAD_DIR = path.resolve(process.env.UPLOAD_ROOT || path.resolve(__dirname, '../uploads'));
 
 type AuthenticatedRequest = express.Request & {
   authUser?: {
@@ -120,10 +121,18 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '2mb' }));
 
-const UPLOAD_DIR = path.resolve(__dirname, '../uploads');
 if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
+
+app.get('/healthz', async (_req, res) => {
+  try {
+    await getDb();
+    res.json({ ok: true });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error.message || 'database unavailable' });
+  }
+});
 
 function getUserUploadDir(userId: number) {
   return path.join(UPLOAD_DIR, `user-${userId}`);
