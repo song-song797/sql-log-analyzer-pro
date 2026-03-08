@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+.agents
+data
+uploads
+test-results
+playwright-report
+*.log

@@ -1,0 +1,15 @@
+node_modules/
+build/
+dist/
+coverage/
+playwright-report/
+test-results/
+data/
+uploads/
+.agents/
+.DS_Store
+*.log
+.server-port
+.run-*.log
+.env*
+!.env.example
