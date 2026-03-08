@@ -33,7 +33,7 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       hmr: process.env.DISABLE_HMR !== 'true',
-      strictPort: false,
+      strictPort: true,
       proxy: {
         '/api': {
           target: `http://127.0.0.1:${getServerPort()}`,

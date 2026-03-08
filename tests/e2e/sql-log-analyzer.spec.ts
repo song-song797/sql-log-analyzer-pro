@@ -1,4 +1,4 @@
-import { expect, request, test, type Page } from '@playwright/test';
+import { expect, request, test, type APIRequestContext, type Page } from '@playwright/test';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -7,15 +7,20 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '../..');
 const TEST_DATA_DIR = path.join(ROOT_DIR, 'test_data');
-const UPLOADS_DIR = path.join(ROOT_DIR, 'uploads');
+const TEST_RUNTIME_DIR = path.join(ROOT_DIR, 'test-results', 'e2e-fixtures');
 const BACKEND_URL = 'http://127.0.0.1:4399';
+const TOKEN_STORAGE_KEY = 'sql-log-analyzer-token';
+const UDAL_FIXTURE_NAME = 'sample_udal.log';
+const POSTGRES_FIXTURE_NAME = 'sample_postgresql.log';
 
 const createdTaskIds = new Set<number>();
 const createdUploadPaths = new Set<string>();
 
-let baselineRecentTaskIds: number[] = [];
-let baselineUploadNames = new Set<string>();
+let authToken = '';
+let authEmail = '';
+let authPassword = 'password123';
 let cleanupVerified = false;
+let baselineRecentTaskIds: number[] = [];
 
 type UploadResponse = {
   filename: string;
@@ -33,24 +38,59 @@ type AnalyzeResponse = {
   error?: string;
 };
 
-async function listUploadNames(): Promise<string[]> {
-  return (await fs.readdir(UPLOADS_DIR)).sort();
+function createAuthHeaders() {
+  return { Authorization: `Bearer ${authToken}` };
+}
+
+async function createApiContext() {
+  return request.newContext({
+    baseURL: BACKEND_URL,
+    extraHTTPHeaders: createAuthHeaders(),
+  });
+}
+
+async function registerSmokeUser() {
+  const apiContext = await request.newContext({ baseURL: BACKEND_URL });
+  try {
+    authEmail = `playwright-${Date.now()}@example.com`;
+    const response = await apiContext.post('/api/auth/register', {
+      data: {
+        email: authEmail,
+        password: authPassword,
+        displayName: 'Playwright Smoke',
+      },
+    });
+    expect(response.ok()).toBeTruthy();
+    const payload = await response.json();
+    authToken = payload.token;
+    expect(authToken).toBeTruthy();
+  } finally {
+    await apiContext.dispose();
+  }
+}
+
+async function prepareFixtures() {
+  await fs.mkdir(TEST_RUNTIME_DIR, { recursive: true });
+  await fs.copyFile(path.join(TEST_DATA_DIR, '审计日志1.log'), path.join(TEST_RUNTIME_DIR, UDAL_FIXTURE_NAME));
+  await fs.copyFile(path.join(TEST_DATA_DIR, 'postgresql_0933_0939.log'), path.join(TEST_RUNTIME_DIR, POSTGRES_FIXTURE_NAME));
 }
 
 async function getRecentTaskIds(): Promise<number[]> {
-  const apiContext = await request.newContext({ baseURL: BACKEND_URL });
+  const apiContext = await createApiContext();
   try {
     const response = await apiContext.get('/api/recent');
     expect(response.ok()).toBeTruthy();
     const payload = await response.json();
-    return (payload.files ?? []).map((file: { task_id: number }) => file.task_id).sort((a: number, b: number) => a - b);
+    return (payload.files ?? [])
+      .map((file: { task_id?: number; taskId?: number }) => Number(file.task_id ?? file.taskId))
+      .sort((a: number, b: number) => a - b);
   } finally {
     await apiContext.dispose();
   }
 }
 
 async function cleanupTrackedArtifacts() {
-  const apiContext = await request.newContext({ baseURL: BACKEND_URL });
+  const apiContext = await createApiContext();
 
   try {
     for (const taskId of [...createdTaskIds].reverse()) {
@@ -63,20 +103,24 @@ async function cleanupTrackedArtifacts() {
   }
 
   for (const uploadPath of [...createdUploadPaths]) {
-    const uploadName = path.basename(uploadPath);
-    if (baselineUploadNames.has(uploadName)) {
-      createdUploadPaths.delete(uploadPath);
-      continue;
-    }
     await fs.rm(uploadPath, { force: true });
     createdUploadPaths.delete(uploadPath);
   }
 }
 
+async function primeAuth(page: Page) {
+  await page.addInitScript(
+    ({ token, tokenKey }) => {
+      window.localStorage.setItem(tokenKey, token);
+    },
+    { token: authToken, tokenKey: TOKEN_STORAGE_KEY }
+  );
+}
+
 async function uploadLog(page: Page, filename: string): Promise<UploadResponse> {
   const [response] = await Promise.all([
     page.waitForResponse((res) => res.url().includes('/api/upload') && res.request().method() === 'POST'),
-    page.getByTestId('file-input').setInputFiles(path.join(TEST_DATA_DIR, filename)),
+    page.getByTestId('file-input').setInputFiles(path.join(TEST_RUNTIME_DIR, filename)),
   ]);
 
   expect(response.ok()).toBeTruthy();
@@ -100,8 +144,13 @@ async function analyzeCurrentUpload(page: Page): Promise<AnalyzeResponse> {
 
 test.describe.serial('SQL Log Analyzer E2E', () => {
   test.beforeAll(async () => {
-    baselineUploadNames = new Set(await listUploadNames());
+    await prepareFixtures();
+    await registerSmokeUser();
     baselineRecentTaskIds = await getRecentTaskIds();
+  });
+
+  test.beforeEach(async ({ page }) => {
+    await primeAuth(page);
   });
 
   test.afterAll(async () => {
@@ -125,7 +174,7 @@ test.describe.serial('SQL Log Analyzer E2E', () => {
 
   test('runs the UDAL flow including search, export, recent load, and recent delete', async ({ page }, testInfo) => {
     await page.goto('/');
-    await uploadLog(page, 'sample_udal.log');
+    await uploadLog(page, UDAL_FIXTURE_NAME);
 
     await expect(page.getByTestId('analyze-button')).toBeEnabled();
     const analyzePayload = await analyzeCurrentUpload(page);
@@ -133,7 +182,7 @@ test.describe.serial('SQL Log Analyzer E2E', () => {
     expect(analyzePayload.clusterCount ?? 0).toBeGreaterThan(0);
 
     const udalTaskId = analyzePayload.taskId!;
-    await expect(page.getByTestId('current-task-name')).toHaveText('sample_udal.log');
+    await expect(page.getByTestId('current-task-name')).toHaveText(UDAL_FIXTURE_NAME);
     await expect(page.getByTestId('metric-total-lines')).not.toContainText('0');
     await expect(page.getByTestId('metric-cluster-count')).not.toContainText('0');
     await expect(page.getByTestId('results-table')).toBeVisible();
@@ -150,7 +199,7 @@ test.describe.serial('SQL Log Analyzer E2E', () => {
     await page.getByTestId('engine-postgresql').click();
     await expect(page.getByTestId('analysis-dirty-hint')).toContainText('配置已修改');
     await expect(page.getByTestId('analyze-button')).toContainText('应用规则并重新分析');
-    await expect(page.getByTestId('current-task-name')).toHaveText('sample_udal.log');
+    await expect(page.getByTestId('current-task-name')).toHaveText(UDAL_FIXTURE_NAME);
     await page.getByTestId('engine-udal').click();
     await expect(page.getByTestId('analysis-dirty-hint')).toContainText('配置已修改');
 
@@ -179,7 +228,7 @@ test.describe.serial('SQL Log Analyzer E2E', () => {
     await page.reload();
     await expect(page.getByTestId('empty-state-idle')).toBeVisible();
     await page.getByTestId(`recent-item-${udalTaskId}`).click();
-    await expect(page.getByTestId('current-task-name')).toHaveText('sample_udal.log');
+    await expect(page.getByTestId('current-task-name')).toHaveText(UDAL_FIXTURE_NAME);
 
     await page.getByTestId(`recent-item-${udalTaskId}`).hover();
     await page.getByTestId(`recent-delete-${udalTaskId}`).click({ force: true });
@@ -191,19 +240,19 @@ test.describe.serial('SQL Log Analyzer E2E', () => {
   test('runs the PostgreSQL flow', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('engine-postgresql').click();
-    await uploadLog(page, 'sample_postgresql.log');
+    await uploadLog(page, POSTGRES_FIXTURE_NAME);
 
     const analyzePayload = await analyzeCurrentUpload(page);
     expect(analyzePayload.taskId).toBeTruthy();
     expect(analyzePayload.clusterCount ?? 0).toBeGreaterThan(0);
 
-    await expect(page.getByTestId('current-task-name')).toHaveText('sample_postgresql.log');
+    await expect(page.getByTestId('current-task-name')).toHaveText(POSTGRES_FIXTURE_NAME);
     await expect(page.getByTestId('results-table')).toBeVisible();
   });
 
   test('shows backend analysis errors to the user', async ({ page }) => {
     await page.goto('/');
-    await uploadLog(page, 'sample_udal.log');
+    await uploadLog(page, UDAL_FIXTURE_NAME);
 
     await page.route('**/api/analyze', async (route) => {
       await route.fulfill({
@@ -223,7 +272,8 @@ test.describe.serial('SQL Log Analyzer E2E', () => {
     await cleanupTrackedArtifacts();
     cleanupVerified = true;
 
-    expect(await listUploadNames()).toEqual([...baselineUploadNames].sort());
     expect(await getRecentTaskIds()).toEqual(baselineRecentTaskIds);
+    expect(createdUploadPaths.size).toBe(0);
+    expect(createdTaskIds.size).toBe(0);
   });
 });

@@ -4,9 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port=3000 --host=0.0.0.0",
+    "dev": "vite --port=3000 --host=0.0.0.0 --strictPort",
     "server": "tsx server/server.ts",
     "dev:all": "concurrently \"npm run server\" \"npm run dev\"",
+    "start:local": "node scripts/start-local.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
@@ -15,7 +16,8 @@
     "server:test": "node scripts/test-backend.mjs",
     "test:parser": "tsx --test tests/parser-correlation.test.ts",
     "test:e2e": "playwright test",
-    "test:e2e:install": "playwright install chromium"
+    "test:e2e:install": "playwright install chromium",
+    "test:ci": "npm run lint && npm run build && npm run test:parser && npm run test:e2e"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

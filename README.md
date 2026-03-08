@@ -39,15 +39,21 @@
    CREATE DATABASE sql_log_analyzer;
    ```
 
-4. 启动后端
+4. 一键启动前后端
+
+   ```bash
+   npm run start:local
+   ```
+
+   默认会固定使用：
+
+   - 前端：`http://127.0.0.1:3000`
+   - 后端：`http://127.0.0.1:4399`
+
+5. 如需分开启动，可分别执行
 
    ```bash
    npm run server
-   ```
-
-5. 启动前端
-
-   ```bash
    npm run dev
    ```
 
@@ -120,7 +126,16 @@ FRONTEND_PORT=3000
 npm run lint
 npm run build
 npm run test:parser
+npm run test:e2e
 ```
+
+## GitHub Actions
+
+仓库已提供 CI 工作流：
+
+- 文件：[.github/workflows/ci.yml](/D:/software_test/sql-log-analyzer-pro/.github/workflows/ci.yml)
+- 覆盖内容：`lint`、`build`、`test:parser`、`test:e2e`
+- CI 会在 GitHub Actions 中自动拉起 PostgreSQL 17 服务
 
 ## 当前仍建议继续补强的点
 
